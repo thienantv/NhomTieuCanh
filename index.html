@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Hệ Thống Điểm Danh</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary: #4f46e5; --primary-light: #e0e7ff;
+            --success: #10b981; --success-light: #d1fae5;
+            --error: #ef4444; --error-light: #fee2e2;
+            --bg-color: #f3f4f6; --card-bg: #ffffff;
+            --text-main: #111827; --text-muted: #6b7280; --border: #e5e7eb;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        
+        body { 
+            background-color: var(--bg-color); color: var(--text-main); 
+            padding: 12px; max-width: 500px; margin: auto; 
+            -webkit-font-smoothing: antialiased;
+            height: 100dvh; 
+            display: flex; flex-direction: column; 
+            overflow: hidden; 
+        }
+        
+        .card { 
+            background: var(--card-bg); padding: 12px; 
+            border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); 
+            border: 1px solid rgba(0,0,0,0.02);
+            display: flex; flex-direction: column;
+        }
+
+        #card-header { flex-shrink: 0; margin-bottom: 12px; }
+        #card-list { flex: 1; min-height: 0; margin-bottom: 0; }
+
+        .header-title { text-align: center; font-size: 18px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; letter-spacing: -0.5px; }
+
+        .activity-selector { margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+        .activity-selector select { 
+            width: 100%; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); 
+            background-color: var(--card-bg); font-size: 14px; font-weight: 600; color: var(--primary); 
+            outline: none; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+        }
+        
+        .today-badge { display: flex; align-items: center; justify-content: center; background-color: var(--primary-light); color: var(--primary); padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: 13px; width: 100%; margin-bottom: 10px; }
+
+        #status { padding: 10px; text-align: center; font-weight: 600; font-size: 13px; border-radius: 10px; transition: all 0.3s ease; }
+        .status-default { background: var(--border); color: var(--text-muted); }
+        .status-success { background: var(--success-light); color: var(--success); }
+        .status-error { background: var(--error-light); color: var(--error); }
+        .status-loading { background: var(--primary-light); color: var(--primary); }
+
+        .list-header-wrapper { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+        .list-header { font-size: 16px; font-weight: 700; margin: 0; }
+        .btn-toggle { background-color: var(--primary-light); color: var(--primary); border: none; padding: 6px 12px; border-radius: 20px; font-weight: 600; font-size: 12px; cursor: pointer; transition: all 0.2s ease; }
+        
+        .user-list { flex: 1; overflow-y: auto; padding-right: 4px; position: relative; }
+        .user-list::-webkit-scrollbar { width: 4px; }
+        .user-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .user-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; margin-bottom: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .user-item.active { background-color: #f8fafc; border-color: var(--success); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.05); }
+
+        .user-info-wrapper { display: flex; align-items: center; gap: 10px; }
+        .avatar { width: 36px; height: 36px; border-radius: 50%; background-color: var(--primary-light); color: var(--primary); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+        .user-item.active .avatar { background-color: var(--success-light); color: var(--success); }
+        .user-info { display: flex; flex-direction: column; }
+        .user-name { font-size: 14px; font-weight: 600; color: var(--text-main); margin-bottom: 2px; }
+        .user-id { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+
+        .custom-checkbox-container { position: relative; cursor: pointer; font-size: 22px; user-select: none; width: 26px; height: 26px; flex-shrink: 0; }
+        .custom-checkbox-container input { position: absolute; opacity: 0; cursor: pointer; height: 0; width: 0; }
+        .checkmark { position: absolute; top: 0; left: 0; height: 26px; width: 26px; background-color: var(--bg-color); border: 2px solid #d1d5db; border-radius: 50%; transition: all 0.2s ease; }
+        .custom-checkbox-container input:checked ~ .checkmark { background-color: var(--success); border-color: var(--success); }
+        .checkmark:after { content: ""; position: absolute; display: none; left: 8px; top: 5px; width: 5px; height: 10px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+        .custom-checkbox-container input:checked ~ .checkmark:after { display: block; }
+    </style>
+</head>
+<body>
+    <div class="card" id="card-header">
+        <h2 class="header-title">Hệ Thống Điểm Danh</h2>
+        
+        <div class="activity-selector">
+            <select id="sheetSelect" onchange="onSheetChange()">
+                <option>Đang tải danh sách...</option>
+            </select>
+        </div>
+
+        <div class="today-badge">📅 Hôm nay: &nbsp;<span id="todayDisplay">...</span></div>
+        
+        <div id="status" class="status-default">⏳ Đang kết nối hệ thống...</div>
+    </div>
+
+    <div class="card" id="card-list">
+        <div class="list-header-wrapper">
+            <h3 class="list-header">Danh Sách Điểm Danh</h3>
+            <!-- <button id="btnToggleList" class="btn-toggle" onclick="toggleList()">Chỉ hiện đã chọn</button> -->
+        </div>
+        <div class="user-list" id="userList"></div>
+    </div>
+
+    <script>
+        // Thay thế bằng URL Web App của bạn sau khi triển khai
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxiLK6KkaUS-hGxx73KP5LMszCUDctL-MY9Q83aBdJlX4hA1UwTPLWFY5UlNtG_FVmF/exec"; 
+        
+        let globalData = {}; 
+        let currentSheetName = ""; 
+        let usersData = []; 
+        let todayDateStr = "";
+        let showOnlyChecked = false; 
+
+        function getInitials(name) { 
+            return name && name.trim() !== "" ? name.trim().split(" ").pop().charAt(0).toUpperCase() : "?"; 
+        }
+
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById("status");
+            statusEl.innerText = message; 
+            statusEl.className = ""; 
+            if(type === 'success') statusEl.classList.add('status-success');
+            else if(type === 'error') statusEl.classList.add('status-error');
+            else if(type === 'loading') statusEl.classList.add('status-loading');
+            else statusEl.classList.add('status-default');
+        }
+
+        function toggleList() {
+            showOnlyChecked = !showOnlyChecked;
+            document.getElementById("btnToggleList").innerText = showOnlyChecked ? "Hiện tất cả" : "Chỉ hiện đã chọn";
+            renderList();
+        }
+
+        function onSheetChange() {
+            const select = document.getElementById("sheetSelect");
+            currentSheetName = select.value;
+            usersData = globalData[currentSheetName] || [];
+            renderList();
+            updateStatus(`Đã chuyển sang: ${currentSheetName}`, "default");
+        }
+
+        function loadInitialData() {
+            fetch(SCRIPT_URL).then(res => res.json()).then(data => {
+                todayDateStr = data.today;
+                globalData = data.data; 
+                
+                document.getElementById("todayDisplay").innerText = todayDateStr;
+                
+                const select = document.getElementById("sheetSelect");
+                select.innerHTML = "";
+                data.sheetNames.forEach(sheet => {
+                    const opt = document.createElement("option");
+                    opt.value = sheet; 
+                    opt.innerText = sheet;
+                    select.appendChild(opt);
+                });
+
+                if (data.sheetNames.length > 0) {
+                    currentSheetName = data.sheetNames[0];
+                    usersData = globalData[currentSheetName] || [];
+                }
+
+                renderList();
+                updateStatus("✅ Sẵn sàng điểm danh!", "success");
+                
+            }).catch(err => { 
+                updateStatus("⚠️ Lỗi kết nối Google Sheets!", "error"); 
+            });
+        }
+
+        function renderList() {
+            const container = document.getElementById("userList");
+            container.innerHTML = "";
+            
+            // Lọc bỏ những dòng trống (không có STT và không có Tên)
+            let displayUsers = usersData.filter(u => u.id !== "" && u.name !== "");
+
+            if (showOnlyChecked) {
+                displayUsers = displayUsers.filter(u => u.checked);
+            }
+            
+            if (displayUsers.length === 0) {
+                if (showOnlyChecked) {
+                    container.innerHTML = `<div style="text-align:center; padding: 25px 10px; color: var(--text-muted); font-size: 13px; line-height: 1.6;">Chưa có ai được điểm danh trong mục này.</div>`;
+                } else {
+                    container.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--text-muted); font-size: 13px;">Danh sách trống</div>`;
+                }
+                return;
+            }
+
+            displayUsers.forEach(user => {
+                const div = document.createElement("div");
+                div.className = `user-item ${user.checked ? 'active' : ''}`;
+                div.id = `user-${user.id}`;
+                div.innerHTML = `
+                    <div class="user-info-wrapper">
+                        <div class="avatar">${getInitials(user.name)}</div>
+                        <div class="user-info">
+                            <span class="user-name">${user.name}</span>
+                            <span class="user-id">STT: ${user.id}</span>
+                        </div>
+                    </div>
+                    <label class="custom-checkbox-container">
+                        <input type="checkbox" ${user.checked ? 'checked' : ''} onchange="manualCheck('${user.id}', this.checked)">
+                        <span class="checkmark"></span>
+                    </label>`;
+                container.appendChild(div);
+            });
+        }
+
+        function sendDataToSheet(id, userName, isChecked) {
+            updateStatus(`⏳ Đang lưu: ${userName}...`, "loading");
+            fetch(SCRIPT_URL, { 
+                method: "POST", 
+                mode: "no-cors", 
+                headers: { "Content-Type": "application/json" }, 
+                body: JSON.stringify({ id: id, checked: isChecked, sheetName: currentSheetName }) 
+            }).then(() => {
+                updateStatus(isChecked ? `✅ Đã điểm danh: ${userName}` : `↩️ Đã bỏ chọn: ${userName}`, "success");
+            }).catch(() => {
+                updateStatus(`⚠️ Lỗi khi lưu dữ liệu cho ${userName}`, "error");
+            });
+        }
+
+        function manualCheck(id, isChecked) {
+            let user = usersData.find(u => u.id === id);
+            if (user) {
+                user.checked = isChecked;
+                renderList();
+                sendDataToSheet(id, user.name, isChecked);
+            }
+        }
+
+        loadInitialData();
+    </script>
+</body>
+</html>
