@@ -53,15 +53,16 @@
         .status-error { background: var(--error-light); color: var(--error); }
         .status-loading { background: var(--primary-light); color: var(--primary); }
 
-        .list-header-wrapper { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-        .list-header { font-size: 16px; font-weight: 700; margin: 0; }
-        .btn-toggle { background-color: var(--primary-light); color: var(--primary); border: none; padding: 6px 12px; border-radius: 20px; font-weight: 600; font-size: 12px; cursor: pointer; transition: all 0.2s ease; }
+        .list-header-wrapper { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 6px; }
+        .list-header { font-size: 15px; font-weight: 700; margin: 0; }
+        .header-actions { display: flex; align-items: center; gap: 6px; }
+        .btn-toggle { background-color: var(--primary-light); color: var(--primary); border: none; padding: 6px 10px; border-radius: 20px; font-weight: 600; font-size: 12px; cursor: pointer; transition: all 0.2s ease; white-space: nowrap; }
+        .btn-toggle:active { transform: scale(0.96); }
         
         .user-list { flex: 1; overflow-y: auto; padding-right: 4px; position: relative; }
         .user-list::-webkit-scrollbar { width: 4px; }
         .user-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        .user-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; margin-bottom: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); animation: fadeIn 0.3s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .user-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; margin-bottom: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); transition: background-color 0.2s, border-color 0.2s; }
         .user-item.active { background-color: #f8fafc; border-color: var(--success); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.05); }
 
         .user-info-wrapper { display: flex; align-items: center; gap: 10px; }
@@ -96,8 +97,11 @@
 
     <div class="card" id="card-list">
         <div class="list-header-wrapper">
-            <h3 class="list-header">Danh Sách Điểm Danh</h3>
-            <!-- <button id="btnToggleList" class="btn-toggle" onclick="toggleList()">Chỉ hiện đã chọn</button> -->
+            <h3 class="list-header">Danh Sách <span id="checkedCount" style="color: var(--success); font-size: 13px;"></span></h3>
+            <div class="header-actions">
+                <button class="btn-toggle" onclick="syncFromServer(true)" title="Cập nhật ngay">🔄</button>
+                <button id="btnToggleList" class="btn-toggle" onclick="toggleList()">Chỉ hiện đã chọn</button>
+            </div>
         </div>
         <div class="user-list" id="userList"></div>
     </div>
@@ -105,6 +109,9 @@
     <script>
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxiLK6KkaUS-hGxx73KP5LMszCUDctL-MY9Q83aBdJlX4hA1UwTPLWFY5UlNtG_FVmF/exec"; 
         
+        // Thời gian tự động đồng bộ lại danh sách (10000ms = 10 giây)
+        const AUTO_SYNC_INTERVAL = 10000;
+
         let globalData = {}; 
         let currentSheetName = ""; 
         let usersData = []; 
@@ -112,9 +119,11 @@
         let showOnlyChecked = false; 
 
         // Bộ gom nhóm (Batching) theo từng Sheet
-        let pendingChanges = {}; // { "TenSheet": { "1": true, "2": false } }
+        let pendingChanges = {}; 
         let syncTimer = null;
         let isSyncing = false;
+        let isFetchingUpdates = false;
+        let lastWriteTime = 0;
 
         function getInitials(name) { 
             return name && name.trim() !== "" ? name.trim().split(" ").pop().charAt(0).toUpperCase() : "?"; 
@@ -130,6 +139,17 @@
             else statusEl.classList.add('status-default');
         }
 
+        function updateCounter() {
+            const validUsers = usersData.filter(u => u.id !== "" && u.name !== "");
+            const checkedUsers = validUsers.filter(u => u.checked);
+            const counterEl = document.getElementById("checkedCount");
+            if (validUsers.length > 0) {
+                counterEl.innerText = `(${checkedUsers.length}/${validUsers.length})`;
+            } else {
+                counterEl.innerText = "";
+            }
+        }
+
         function toggleList() {
             showOnlyChecked = !showOnlyChecked;
             document.getElementById("btnToggleList").innerText = showOnlyChecked ? "Hiện tất cả" : "Chỉ hiện đã chọn";
@@ -137,7 +157,6 @@
         }
 
         function onSheetChange() {
-            // Nếu đang có thay đổi chưa gửi ở tab cũ, đẩy gửi ngay lập tức trước khi chuyển tab
             if (Object.keys(pendingChanges).length > 0) {
                 clearTimeout(syncTimer);
                 flushChanges();
@@ -173,15 +192,61 @@
 
                 renderList();
                 updateStatus("✅ Sẵn sàng điểm danh!", "success");
+
+                // Bắt đầu chu kỳ tự động đồng bộ ngầm
+                setInterval(() => syncFromServer(false), AUTO_SYNC_INTERVAL);
                 
             }).catch(err => { 
                 updateStatus("⚠️ Lỗi kết nối Google Sheets!", "error"); 
             });
         }
 
+        // Hàm tự động lấy dữ liệu mới nhất từ Google Sheets về
+        async function syncFromServer(isManual = false) {
+            // Bỏ qua nếu đang gửi dữ liệu lên, đang có thao tác chờ gửi, hoặc vừa mới lưu xong chưa đầy 3 giây
+            if (isSyncing || isFetchingUpdates || Object.keys(pendingChanges).length > 0) return;
+            if (!isManual && (Date.now() - lastWriteTime < 3000)) return;
+            // Tạm dừng đồng bộ ngầm nếu người dùng đang ẩn/thu nhỏ tab trình duyệt để tiết kiệm tài nguyên
+            if (!isManual && document.hidden) return;
+
+            isFetchingUpdates = true;
+            if (isManual) updateStatus("🔄 Đang làm mới dữ liệu...", "loading");
+
+            try {
+                const res = await fetch(SCRIPT_URL);
+                const data = await res.json();
+
+                // Kiểm tra lại lần nữa xem trong lúc tải về người dùng có bấm tick ai không
+                if (isSyncing || Object.keys(pendingChanges).length > 0) {
+                    isFetchingUpdates = false;
+                    return;
+                }
+
+                todayDateStr = data.today;
+                document.getElementById("todayDisplay").innerText = todayDateStr;
+                globalData = data.data;
+                usersData = globalData[currentSheetName] || [];
+
+                // Lưu lại vị trí thanh cuộn hiện tại để không bị giật lên đầu trang
+                const listEl = document.getElementById("userList");
+                const currentScroll = listEl.scrollTop;
+                renderList();
+                listEl.scrollTop = currentScroll;
+
+                if (isManual) {
+                    updateStatus("✅ Đã cập nhật danh sách mới nhất!", "success");
+                }
+            } catch (err) {
+                if (isManual) updateStatus("⚠️ Không thể làm mới dữ liệu!", "error");
+            } finally {
+                isFetchingUpdates = false;
+            }
+        }
+
         function renderList() {
             const container = document.getElementById("userList");
             container.innerHTML = "";
+            updateCounter();
             
             let displayUsers = usersData.filter(u => u.id !== "" && u.name !== "");
 
@@ -222,20 +287,17 @@
             if (!pendingChanges[currentSheetName]) {
                 pendingChanges[currentSheetName] = {};
             }
-            // Ghi đè trạng thái mới nhất của ID này (nếu bấm nhầm rồi bỏ chọn thì tự cập nhật theo lần cuối)
             pendingChanges[currentSheetName][id] = isChecked;
 
             const totalPending = Object.values(pendingChanges).reduce((sum, obj) => sum + Object.keys(obj).length, 0);
             updateStatus(`⏳ Đang gom ${totalPending} thay đổi...`, "loading");
 
-            // Đợi 500ms sau cú chạm cuối cùng mới gửi 1 gói duy nhất
             clearTimeout(syncTimer);
             syncTimer = setTimeout(flushChanges, 500);
         }
 
         async function flushChanges() {
             if (isSyncing) {
-                // Nếu gói trước đang gửi dở, đợi 300ms rồi gửi tiếp gói mới gom được
                 syncTimer = setTimeout(flushChanges, 300);
                 return;
             }
@@ -244,7 +306,6 @@
             if (sheetsToSync.length === 0) return;
 
             isSyncing = true;
-            // Lấy toàn bộ thay đổi hiện tại ra để gửi và làm trống bộ đệm cho các cú bấm tiếp theo
             const batchToSend = pendingChanges;
             pendingChanges = {};
 
@@ -276,8 +337,8 @@
                     }
                 }
 
+                lastWriteTime = Date.now();
                 isSyncing = false;
-                // Kiểm tra xem trong lúc đang gửi người dùng có bấm thêm ai nữa không
                 if (Object.keys(pendingChanges).length > 0) {
                     flushChanges();
                 } else {
@@ -293,7 +354,7 @@
             let user = usersData.find(u => u.id === id);
             if (user) {
                 user.checked = isChecked;
-                // Cập nhật trực tiếp class của dòng đó để mượt hơn thay vì vẽ lại cả danh sách
+                updateCounter();
                 const rowEl = document.getElementById(`user-${id}`);
                 if (rowEl && !showOnlyChecked) {
                     if (isChecked) rowEl.classList.add('active');
@@ -305,7 +366,6 @@
             }
         }
 
-        // Đảm bảo gửi nốt dữ liệu nếu người dùng thoát/đóng tab đột ngột
         window.addEventListener("beforeunload", function () {
             if (Object.keys(pendingChanges).length > 0) {
                 flushChanges();
