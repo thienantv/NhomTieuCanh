@@ -103,7 +103,7 @@
     </div>
 
     <script>
-        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxiLK6KkaUS-hGxx73KP5LMszCUDctL-MY9Q83aBdJlX4hA1UwTPLWFY5UlNtG_FVmF/exec"; 
+        const SCRIPT_URL = "https://script.google.com/macros/library/d/1exJhIF9vc0uSGadtqtdGR_AwDuF36HaqVnjxxyKSkyCYpAXMGaZA1Wkz/2"; 
         
         let globalData = {}; 
         let currentSheetName = ""; 
@@ -111,9 +111,10 @@
         let todayDateStr = "";
         let showOnlyChecked = false; 
 
-        // Hàng đợi xử lý tuần tự khi bấm nhanh
-        let requestQueue = [];
-        let isSending = false;
+        // Bộ gom nhóm (Batching) theo từng Sheet
+        let pendingChanges = {}; // { "TenSheet": { "1": true, "2": false } }
+        let syncTimer = null;
+        let isSyncing = false;
 
         function getInitials(name) { 
             return name && name.trim() !== "" ? name.trim().split(" ").pop().charAt(0).toUpperCase() : "?"; 
@@ -136,6 +137,12 @@
         }
 
         function onSheetChange() {
+            // Nếu đang có thay đổi chưa gửi ở tab cũ, đẩy gửi ngay lập tức trước khi chuyển tab
+            if (Object.keys(pendingChanges).length > 0) {
+                clearTimeout(syncTimer);
+                flushChanges();
+            }
+
             const select = document.getElementById("sheetSelect");
             currentSheetName = select.value;
             usersData = globalData[currentSheetName] || [];
@@ -211,69 +218,99 @@
             });
         }
 
-        // Đưa yêu cầu vào hàng đợi thay vì gửi đồng loạt
-        function enqueueRequest(id, userName, isChecked) {
-            // Nếu cùng 1 người bị bấm nhầm liên tục, chỉ giữ lại trạng thái cuối cùng
-            requestQueue = requestQueue.filter(item => !(item.id === id && item.sheetName === currentSheetName));
-            requestQueue.push({
-                id: id,
-                userName: userName,
-                checked: isChecked,
-                sheetName: currentSheetName
-            });
-            processQueue();
+        function scheduleSync(id, isChecked) {
+            if (!pendingChanges[currentSheetName]) {
+                pendingChanges[currentSheetName] = {};
+            }
+            // Ghi đè trạng thái mới nhất của ID này (nếu bấm nhầm rồi bỏ chọn thì tự cập nhật theo lần cuối)
+            pendingChanges[currentSheetName][id] = isChecked;
+
+            const totalPending = Object.values(pendingChanges).reduce((sum, obj) => sum + Object.keys(obj).length, 0);
+            updateStatus(`⏳ Đang gom ${totalPending} thay đổi...`, "loading");
+
+            // Đợi 500ms sau cú chạm cuối cùng mới gửi 1 gói duy nhất
+            clearTimeout(syncTimer);
+            syncTimer = setTimeout(flushChanges, 500);
         }
 
-        function processQueue() {
-            if (isSending || requestQueue.length === 0) return;
+        async function flushChanges() {
+            if (isSyncing) {
+                // Nếu gói trước đang gửi dở, đợi 300ms rồi gửi tiếp gói mới gom được
+                syncTimer = setTimeout(flushChanges, 300);
+                return;
+            }
 
-            isSending = true;
-            const currentTask = requestQueue.shift();
-            const remaining = requestQueue.length;
-            
-            updateStatus(
-                remaining > 0 
-                    ? `⏳ Đang lưu: ${currentTask.userName} (còn ${remaining} lượt chờ)...` 
-                    : `⏳ Đang lưu: ${currentTask.userName}...`, 
-                "loading"
-            );
+            const sheetsToSync = Object.keys(pendingChanges);
+            if (sheetsToSync.length === 0) return;
 
-            fetch(SCRIPT_URL, { 
-                method: "POST", 
-                mode: "no-cors", 
-                headers: { "Content-Type": "application/json" }, 
-                body: JSON.stringify({ 
-                    id: currentTask.id, 
-                    checked: currentTask.checked, 
-                    sheetName: currentTask.sheetName 
-                }) 
-            }).then(() => {
-                isSending = false;
-                if (requestQueue.length === 0) {
-                    updateStatus(
-                        currentTask.checked 
-                            ? `✅ Đã điểm danh: ${currentTask.userName}` 
-                            : `↩️ Đã bỏ chọn: ${currentTask.userName}`, 
-                        "success"
-                    );
-                } else {
-                    processQueue(); // Xử lý tiếp người kế tiếp trong hàng đợi
+            isSyncing = true;
+            // Lấy toàn bộ thay đổi hiện tại ra để gửi và làm trống bộ đệm cho các cú bấm tiếp theo
+            const batchToSend = pendingChanges;
+            pendingChanges = {};
+
+            let totalItems = 0;
+            for (const s of sheetsToSync) {
+                totalItems += Object.keys(batchToSend[s]).length;
+            }
+
+            updateStatus(`🚀 Đang đồng bộ ${totalItems} mục lên Google Sheets...`, "loading");
+
+            try {
+                for (const sheetName of sheetsToSync) {
+                    const itemsMap = batchToSend[sheetName];
+                    const itemsArray = Object.keys(itemsMap).map(id => ({
+                        id: id,
+                        checked: itemsMap[id]
+                    }));
+
+                    if (itemsArray.length > 0) {
+                        await fetch(SCRIPT_URL, {
+                            method: "POST",
+                            mode: "no-cors",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                sheetName: sheetName,
+                                items: itemsArray
+                            })
+                        });
+                    }
                 }
-            }).catch(() => {
-                isSending = false;
-                updateStatus(`⚠️ Lỗi khi lưu dữ liệu cho ${currentTask.userName}`, "error");
-                processQueue();
-            });
+
+                isSyncing = false;
+                // Kiểm tra xem trong lúc đang gửi người dùng có bấm thêm ai nữa không
+                if (Object.keys(pendingChanges).length > 0) {
+                    flushChanges();
+                } else {
+                    updateStatus(`✅ Đã lưu thành công (${totalItems} mục)!`, "success");
+                }
+            } catch (err) {
+                isSyncing = false;
+                updateStatus("⚠️ Lỗi kết nối khi lưu dữ liệu!", "error");
+            }
         }
 
         function manualCheck(id, isChecked) {
             let user = usersData.find(u => u.id === id);
             if (user) {
                 user.checked = isChecked;
-                renderList();
-                enqueueRequest(id, user.name, isChecked);
+                // Cập nhật trực tiếp class của dòng đó để mượt hơn thay vì vẽ lại cả danh sách
+                const rowEl = document.getElementById(`user-${id}`);
+                if (rowEl && !showOnlyChecked) {
+                    if (isChecked) rowEl.classList.add('active');
+                    else rowEl.classList.remove('active');
+                } else {
+                    renderList();
+                }
+                scheduleSync(id, isChecked);
             }
         }
+
+        // Đảm bảo gửi nốt dữ liệu nếu người dùng thoát/đóng tab đột ngột
+        window.addEventListener("beforeunload", function () {
+            if (Object.keys(pendingChanges).length > 0) {
+                flushChanges();
+            }
+        });
 
         loadInitialData();
     </script>
