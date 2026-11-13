@@ -103,7 +103,6 @@
     </div>
 
     <script>
-        // Thay thế bằng URL Web App của bạn sau khi triển khai
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxiLK6KkaUS-hGxx73KP5LMszCUDctL-MY9Q83aBdJlX4hA1UwTPLWFY5UlNtG_FVmF/exec"; 
         
         let globalData = {}; 
@@ -111,6 +110,10 @@
         let usersData = []; 
         let todayDateStr = "";
         let showOnlyChecked = false; 
+
+        // Hàng đợi xử lý tuần tự khi bấm nhanh
+        let requestQueue = [];
+        let isSending = false;
 
         function getInitials(name) { 
             return name && name.trim() !== "" ? name.trim().split(" ").pop().charAt(0).toUpperCase() : "?"; 
@@ -173,7 +176,6 @@
             const container = document.getElementById("userList");
             container.innerHTML = "";
             
-            // Lọc bỏ những dòng trống (không có STT và không có Tên)
             let displayUsers = usersData.filter(u => u.id !== "" && u.name !== "");
 
             if (showOnlyChecked) {
@@ -209,17 +211,58 @@
             });
         }
 
-        function sendDataToSheet(id, userName, isChecked) {
-            updateStatus(`⏳ Đang lưu: ${userName}...`, "loading");
+        // Đưa yêu cầu vào hàng đợi thay vì gửi đồng loạt
+        function enqueueRequest(id, userName, isChecked) {
+            // Nếu cùng 1 người bị bấm nhầm liên tục, chỉ giữ lại trạng thái cuối cùng
+            requestQueue = requestQueue.filter(item => !(item.id === id && item.sheetName === currentSheetName));
+            requestQueue.push({
+                id: id,
+                userName: userName,
+                checked: isChecked,
+                sheetName: currentSheetName
+            });
+            processQueue();
+        }
+
+        function processQueue() {
+            if (isSending || requestQueue.length === 0) return;
+
+            isSending = true;
+            const currentTask = requestQueue.shift();
+            const remaining = requestQueue.length;
+            
+            updateStatus(
+                remaining > 0 
+                    ? `⏳ Đang lưu: ${currentTask.userName} (còn ${remaining} lượt chờ)...` 
+                    : `⏳ Đang lưu: ${currentTask.userName}...`, 
+                "loading"
+            );
+
             fetch(SCRIPT_URL, { 
                 method: "POST", 
                 mode: "no-cors", 
                 headers: { "Content-Type": "application/json" }, 
-                body: JSON.stringify({ id: id, checked: isChecked, sheetName: currentSheetName }) 
+                body: JSON.stringify({ 
+                    id: currentTask.id, 
+                    checked: currentTask.checked, 
+                    sheetName: currentTask.sheetName 
+                }) 
             }).then(() => {
-                updateStatus(isChecked ? `✅ Đã điểm danh: ${userName}` : `↩️ Đã bỏ chọn: ${userName}`, "success");
+                isSending = false;
+                if (requestQueue.length === 0) {
+                    updateStatus(
+                        currentTask.checked 
+                            ? `✅ Đã điểm danh: ${currentTask.userName}` 
+                            : `↩️ Đã bỏ chọn: ${currentTask.userName}`, 
+                        "success"
+                    );
+                } else {
+                    processQueue(); // Xử lý tiếp người kế tiếp trong hàng đợi
+                }
             }).catch(() => {
-                updateStatus(`⚠️ Lỗi khi lưu dữ liệu cho ${userName}`, "error");
+                isSending = false;
+                updateStatus(`⚠️ Lỗi khi lưu dữ liệu cho ${currentTask.userName}`, "error");
+                processQueue();
             });
         }
 
@@ -228,7 +271,7 @@
             if (user) {
                 user.checked = isChecked;
                 renderList();
-                sendDataToSheet(id, user.name, isChecked);
+                enqueueRequest(id, user.name, isChecked);
             }
         }
 
